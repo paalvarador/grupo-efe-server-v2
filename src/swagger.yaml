@@ -1,0 +1,1046 @@
+openapi: 3.0.3
+
+info:
+  title: Grupo EFE — Agente IA Reportes de Ventas
+  description: |
+    API REST desarrollada por **Jelou AI** como capa de integración entre
+    Brain Studio y el sistema de Business Intelligence de Grupo EFE (Clicksense).
+
+    ## Flujo de autenticación
+
+    1. Llama a `POST /auth/token` con el header `X-API-Key: efe-sandbox-key-2026`
+    2. Guarda el `token` que devuelve la respuesta
+    3. Usa ese token en todos los demás endpoints como `Authorization: Bearer <token>`
+
+    El token expira en **1 hora**. Cuando expire, repite el paso 1.
+
+    ## Jerarquías de usuario
+
+    | Nivel | Valor | Alcance |
+    |-------|-------|---------|
+    | Back Office | `back_office` | Toda la compañía |
+    | Gerente Regional | `regional` | Solo su región asignada |
+    | Gerente de Tienda | `tienda` | Solo su tienda asignada |
+
+    ## Nota importante
+    Los usuarios **no se gestionan en esta API**. El Datum de Jelou es la fuente
+    de verdad. Esta API recibe `nivel`, `region_id` y `tienda_id` como parámetros
+    de consulta y filtra los datos en consecuencia.
+
+  version: 1.0.0
+  contact:
+    name: Jelou AI — Soporte técnico
+    email: jessica.contreras@jelou.ai
+
+servers:
+  - url: http://localhost:3000
+    description: Sandbox local (dev-grupo-efe-db)
+  - url: https://api.grupoefe.com.pe
+    description: Producción (a definir por Grupo EFE)
+
+tags:
+  - name: Autenticación
+    description: Obtención del Bearer Token
+  - name: Ventas
+    description: Reportes de avance de ventas por jerarquía
+  - name: Catálogo
+    description: Regiones y tiendas disponibles
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SEGURIDAD
+# ─────────────────────────────────────────────────────────────────────────────
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Clave estática de servidor a servidor. Solo requerida en `POST /auth/token`.
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token JWT obtenido de `POST /auth/token`. Expira en 1 hora.
+
+  # ─── SCHEMAS ────────────────────────────────────────────────────────────────
+  schemas:
+
+    Error:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          example: Parámetros requeridos, nivel
+
+    TokenResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            token:
+              type: string
+              example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+            token_type:
+              type: string
+              example: Bearer
+            expires_in:
+              type: string
+              example: 1h
+
+    Semaforo:
+      type: string
+      enum: ["🔴", "🟡", "🟢"]
+      description: |
+        Indicador visual de cumplimiento de meta:
+        - 🔴 Menor a 50%
+        - 🟡 Entre 50% y 80%
+        - 🟢 Mayor a 80%
+
+    Oportunidad:
+      type: object
+      properties:
+        label:
+          type: string
+          example: Región 7
+        avance_dia_pct:
+          type: number
+          example: 28.5
+        semaforo:
+          $ref: '#/components/schemas/Semaforo'
+
+    ResumenBase:
+      type: object
+      properties:
+        venta_dia_miles_soles:
+          type: number
+          description: Venta del día en miles de soles (S/)
+          example: 1044.8
+        meta_dia_miles_soles:
+          type: number
+          example: 1250.0
+        avance_dia_pct:
+          type: number
+          description: Porcentaje de cumplimiento de meta del día
+          example: 83.6
+        venta_mes_miles_soles:
+          type: number
+          description: Venta acumulada del mes en miles de soles
+          example: 53616.5
+        meta_mes_miles_soles:
+          type: number
+          example: 58900.0
+        avance_mes_pct:
+          type: number
+          description: Porcentaje de cumplimiento de meta mensual acumulada
+          example: 91.0
+        var_dia_vs_anio_anterior_pct:
+          type: number
+          description: Variación porcentual vs mismo día del año anterior (2025)
+          example: -2.4
+
+    ResumenBackOffice:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            tipo:
+              type: string
+              example: back_office
+            nombre_usuario:
+              type: string
+              example: Carlos
+            empresa:
+              type: string
+              example: Conecta
+            fecha:
+              type: string
+              example: "2026-05-18"
+            resumen:
+              allOf:
+                - $ref: '#/components/schemas/ResumenBase'
+                - type: object
+                  properties:
+                    total_regiones:
+                      type: integer
+                      example: 9
+            oportunidades_mejora:
+              type: array
+              description: Las 3 regiones con menor avance del día
+              items:
+                type: object
+                properties:
+                  region_id:
+                    type: string
+                    example: R7
+                  nombre_region:
+                    type: string
+                    example: Región 7
+                  avance_dia_pct:
+                    type: number
+                    example: 28.5
+                  venta_dia_miles_soles:
+                    type: number
+                    example: 59.6
+                  semaforo:
+                    $ref: '#/components/schemas/Semaforo'
+            mensaje_accion:
+              type: string
+              example: Las regiones con menor avance hoy son R7, R2, R5.
+
+    ResumenRegional:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            tipo:
+              type: string
+              example: regional
+            nombre_usuario:
+              type: string
+              example: Marco
+            region_id:
+              type: string
+              example: R3
+            nombre_region:
+              type: string
+              example: Región 3
+            empresa:
+              type: string
+              example: Conecta
+            fecha:
+              type: string
+              example: "2026-05-18"
+            resumen:
+              allOf:
+                - $ref: '#/components/schemas/ResumenBase'
+                - type: object
+                  properties:
+                    total_tiendas:
+                      type: integer
+                      example: 14
+            oportunidades_mejora_categoria:
+              type: array
+              description: Las 3 categorías con menor avance
+              items:
+                type: object
+                properties:
+                  categoria:
+                    type: string
+                    example: VIDEO
+                  avance_dia_pct:
+                    type: number
+                    example: 22.3
+                  venta_dia_miles_soles:
+                    type: number
+                    example: 18.0
+                  semaforo:
+                    $ref: '#/components/schemas/Semaforo'
+            oportunidades_mejora_tienda:
+              type: array
+              description: Las 3 tiendas con menor avance
+              items:
+                type: object
+                properties:
+                  tienda_id:
+                    type: string
+                    example: T309
+                  nombre_tienda:
+                    type: string
+                    example: Trujillo II - LC
+                  avance_dia_pct:
+                    type: number
+                    example: 28.5
+                  semaforo:
+                    $ref: '#/components/schemas/Semaforo'
+            mensaje_accion:
+              type: string
+              example: Tiendas con menor avance hoy, Trujillo II - LC, Barranca - EFE.
+
+    ResumenTienda:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            tipo:
+              type: string
+              example: tienda
+            nombre_usuario:
+              type: string
+              example: Ana
+            tienda_id:
+              type: string
+              example: T306
+            nombre_tienda:
+              type: string
+              example: Trujillo I - EFE
+            region_id:
+              type: string
+              example: R3
+            empresa:
+              type: string
+              example: Conecta
+            fecha:
+              type: string
+              example: "2026-05-18"
+            resumen:
+              $ref: '#/components/schemas/ResumenBase'
+            oportunidades_mejora:
+              type: array
+              description: Las 3 categorías con menor avance en la tienda
+              items:
+                type: object
+                properties:
+                  categoria:
+                    type: string
+                    example: VIDEO
+                  avance_dia_pct:
+                    type: number
+                    example: 18.0
+                  venta_dia_miles_soles:
+                    type: number
+                    example: 2.1
+                  semaforo:
+                    $ref: '#/components/schemas/Semaforo'
+            mensaje_accion:
+              type: string
+              example: Categorías prioritarias hoy, VIDEO, GARANTIA Y SEGUROS, MOTOS.
+
+    ItemCategoria:
+      type: object
+      properties:
+        categoria:
+          type: string
+          example: LINEA BLANCA
+        venta_dia_miles_soles:
+          type: number
+          example: 369.2
+        meta_dia_miles_soles:
+          type: number
+          example: 420.0
+        avance_dia_pct:
+          type: number
+          example: 87.9
+        venta_mes_miles_soles:
+          type: number
+          example: 18043.7
+        semaforo:
+          $ref: '#/components/schemas/Semaforo'
+
+    ItemTiendaRanking:
+      type: object
+      properties:
+        tienda_id:
+          type: string
+          example: T309
+        nombre_tienda:
+          type: string
+          example: Trujillo II - LC
+        region_id:
+          type: string
+          example: R3
+        empresa:
+          type: string
+          example: Conecta
+        avance_dia_pct:
+          type: number
+          example: 28.5
+        venta_dia_miles_soles:
+          type: number
+          example: 5.0
+        meta_dia_miles_soles:
+          type: number
+          example: 17.5
+        avance_mes_pct:
+          type: number
+          example: 71.2
+        semaforo:
+          $ref: '#/components/schemas/Semaforo'
+
+    Region:
+      type: object
+      properties:
+        region_id:
+          type: string
+          example: R3
+        nombre_region:
+          type: string
+          example: Región 3
+        empresa:
+          type: string
+          example: Conecta
+
+    Tienda:
+      type: object
+      properties:
+        tienda_id:
+          type: string
+          example: T306
+        nombre_tienda:
+          type: string
+          example: Trujillo I - EFE
+        region_id:
+          type: string
+          example: R3
+        empresa:
+          type: string
+          example: Conecta
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATHS
+# ─────────────────────────────────────────────────────────────────────────────
+paths:
+
+  # ── AUTH ────────────────────────────────────────────────────────────────────
+  /auth/token:
+    post:
+      tags: [Autenticación]
+      summary: Obtener Bearer Token
+      description: |
+        Intercambia la API Key por un Bearer Token JWT válido por 1 hora.
+        Este es **siempre el primer paso** antes de llamar a cualquier otro endpoint.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Token generado exitosamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+              example:
+                success: true
+                data:
+                  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                  token_type: Bearer
+                  expires_in: 1h
+        '401':
+          description: API Key inválida
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                success: false
+                error: API Key inválida. Usa el header X-API-Key
+
+  # ── VENTAS ──────────────────────────────────────────────────────────────────
+  /ventas/resumen-campana:
+    get:
+      tags: [Ventas]
+      summary: Resumen personalizado por nivel
+      description: |
+        Endpoint principal del agente. Devuelve el resumen del día anterior
+        personalizado según el nivel jerárquico del usuario.
+
+        Usado tanto para la **campaña automática de las 8am** como para
+        consultas bajo demanda en la conversación.
+
+        La respuesta varía según el valor de `nivel`:
+        - `back_office` → resumen por regiones
+        - `regional` → resumen por tiendas y categorías de su región
+        - `tienda` → resumen por categorías de su tienda
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: nivel
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [back_office, regional, tienda]
+          description: Nivel jerárquico del usuario
+          example: regional
+        - name: region_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Requerido si nivel es `regional` o `tienda`. Ej, R3
+          example: R3
+        - name: tienda_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Requerido si nivel es `tienda`. Ej, T306
+          example: T306
+        - name: nombre
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Nombre del usuario para personalizar el saludo
+          example: Marco
+        - name: fecha
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+          description: Fecha del reporte en formato YYYY-MM-DD. Default, ayer
+          example: "2026-05-18"
+      responses:
+        '200':
+          description: Resumen obtenido exitosamente
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ResumenBackOffice'
+                  - $ref: '#/components/schemas/ResumenRegional'
+                  - $ref: '#/components/schemas/ResumenTienda'
+              examples:
+                back_office:
+                  summary: Respuesta para Back Office
+                  value:
+                    success: true
+                    data:
+                      tipo: back_office
+                      nombre_usuario: Carlos
+                      empresa: Conecta
+                      fecha: "2026-05-18"
+                      resumen:
+                        venta_dia_miles_soles: 1044.8
+                        meta_dia_miles_soles: 1250.0
+                        avance_dia_pct: 83.6
+                        venta_mes_miles_soles: 53616.5
+                        avance_mes_pct: 91.0
+                        var_dia_vs_anio_anterior_pct: -2.4
+                        total_regiones: 9
+                      oportunidades_mejora:
+                        - region_id: R7
+                          nombre_region: Región 7
+                          avance_dia_pct: 28.5
+                          semaforo: "🔴"
+                        - region_id: R2
+                          nombre_region: Región 2
+                          avance_dia_pct: 35.2
+                          semaforo: "🔴"
+                      mensaje_accion: Las regiones con menor avance hoy son R7, R2, R5.
+                regional:
+                  summary: Respuesta para Regional (R3)
+                  value:
+                    success: true
+                    data:
+                      tipo: regional
+                      nombre_usuario: Marco
+                      region_id: R3
+                      nombre_region: Región 3
+                      resumen:
+                        venta_dia_miles_soles: 166.0
+                        meta_dia_miles_soles: 200.0
+                        avance_dia_pct: 83.0
+                        venta_mes_miles_soles: 7713.4
+                        avance_mes_pct: 98.9
+                        total_tiendas: 14
+                      oportunidades_mejora_tienda:
+                        - nombre_tienda: Trujillo II - LC
+                          avance_dia_pct: 28.5
+                          semaforo: "🔴"
+                tienda:
+                  summary: Respuesta para Gerente de Tienda (T306)
+                  value:
+                    success: true
+                    data:
+                      tipo: tienda
+                      nombre_usuario: Ana
+                      tienda_id: T306
+                      nombre_tienda: Trujillo I - EFE
+                      region_id: R3
+                      resumen:
+                        venta_dia_miles_soles: 40.4
+                        meta_dia_miles_soles: 48.0
+                        avance_dia_pct: 84.2
+                        avance_mes_pct: 91.5
+                      oportunidades_mejora:
+                        - categoria: VIDEO
+                          avance_dia_pct: 18.0
+                          semaforo: "🔴"
+        '400':
+          description: Parámetros inválidos o faltantes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Token ausente o expirado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /ventas/campana-masiva:
+    post:
+      tags: [Ventas]
+      summary: Campaña masiva (cron 8am)
+      description: |
+        Endpoint del **cron de las 8am**. Recibe el array completo de usuarios
+        activos del Datum de Jelou y devuelve todos los resúmenes en una sola
+        llamada, evitando N requests individuales.
+
+        Jelou llama a este endpoint una vez, procesa la respuesta y despacha
+        el mensaje de WhatsApp personalizado a cada número.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [usuarios]
+              properties:
+                usuarios:
+                  type: array
+                  description: Lista de usuarios activos del Datum
+                  items:
+                    type: object
+                    required: [whatsapp_number, nombre, nivel]
+                    properties:
+                      whatsapp_number:
+                        type: string
+                        example: "51999000003"
+                      nombre:
+                        type: string
+                        example: Marco
+                      nivel:
+                        type: string
+                        enum: [back_office, regional, tienda]
+                        example: regional
+                      region_id:
+                        type: string
+                        nullable: true
+                        example: R3
+                      tienda_id:
+                        type: string
+                        nullable: true
+                        example: null
+            example:
+              usuarios:
+                - whatsapp_number: "51999000001"
+                  nombre: Carlos
+                  nivel: back_office
+                  region_id: null
+                  tienda_id: null
+                - whatsapp_number: "51999000003"
+                  nombre: Marco
+                  nivel: regional
+                  region_id: R3
+                  tienda_id: null
+                - whatsapp_number: "51999000006"
+                  nombre: Ana
+                  nivel: tienda
+                  region_id: R3
+                  tienda_id: T306
+      responses:
+        '200':
+          description: Resúmenes procesados exitosamente
+          content:
+            application/json:
+              example:
+                success: true
+                fecha: "2026-05-18"
+                procesados: 3
+                errores: 0
+                data:
+                  - whatsapp_number: "51999000001"
+                    tipo: back_office
+                    nombre_usuario: Carlos
+                    resumen:
+                      venta_dia_miles_soles: 1044.8
+                      avance_dia_pct: 83.6
+                      avance_mes_pct: 91.0
+                    oportunidades_mejora:
+                      - label: Región 7
+                        avance_dia_pct: 28.5
+                        semaforo: "🔴"
+                  - whatsapp_number: "51999000003"
+                    tipo: regional
+                    region_id: R3
+                    nombre_region: Región 3
+                    resumen:
+                      venta_dia_miles_soles: 166.0
+                      avance_dia_pct: 83.0
+                    oportunidades_mejora:
+                      - label: Trujillo II - LC
+                        avance_dia_pct: 28.5
+                        semaforo: "🔴"
+
+  /ventas/compania:
+    get:
+      tags: [Ventas]
+      summary: Vista completa de la compañía
+      description: Detalle completo de todas las regiones. Disponible para nivel `back_office`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: fecha
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2026-05-18"
+      responses:
+        '200':
+          description: Datos de compañía obtenidos
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  empresa: Conecta
+                  fecha: "2026-05-18"
+                  venta_dia_miles_soles: 1044.8
+                  avance_dia_pct: 83.6
+                  avance_mes_pct: 91.0
+                  regiones:
+                    - region_id: R1
+                      nombre_region: Región 1
+                      avance_dia_pct: 91.2
+                    - region_id: R7
+                      nombre_region: Región 7
+                      avance_dia_pct: 28.5
+
+  /ventas/region/{region_id}:
+    get:
+      tags: [Ventas]
+      summary: Detalle de una región
+      description: |
+        Devuelve el detalle completo de una región incluyendo:
+        resumen general, desglose por tiendas y desglose por categorías.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: region_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID de la región. Ej, R3
+          example: R3
+        - name: fecha
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2026-05-18"
+      responses:
+        '200':
+          description: Detalle de región obtenido
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  region_id: R3
+                  nombre_region: Región 3
+                  fecha: "2026-05-18"
+                  venta_dia_miles_soles: 166.0
+                  avance_dia_pct: 83.0
+                  avance_mes_pct: 98.9
+                  tiendas:
+                    - tienda_id: T306
+                      nombre_tienda: Trujillo I - EFE
+                      avance_dia_pct: 84.2
+                    - tienda_id: T309
+                      nombre_tienda: Trujillo II - LC
+                      avance_dia_pct: 28.5
+        '404':
+          description: Región no encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /ventas/tienda/{tienda_id}:
+    get:
+      tags: [Ventas]
+      summary: Detalle de una tienda
+      description: Devuelve el detalle de una tienda con desglose completo por categorías.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: tienda_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID de la tienda. Ej, T306
+          example: T306
+        - name: fecha
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2026-05-18"
+      responses:
+        '200':
+          description: Detalle de tienda obtenido
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  tienda_id: T306
+                  nombre_tienda: Trujillo I - EFE
+                  region_id: R3
+                  fecha: "2026-05-18"
+                  venta_dia_miles_soles: 40.4
+                  avance_dia_pct: 84.2
+                  avance_mes_pct: 91.5
+                  categorias:
+                    - categoria: LINEA BLANCA
+                      venta_dia_miles_soles: 14.2
+                      avance_dia_pct: 95.1
+                      semaforo: "🟢"
+                    - categoria: VIDEO
+                      venta_dia_miles_soles: 2.1
+                      avance_dia_pct: 18.0
+                      semaforo: "🔴"
+        '404':
+          description: Tienda no encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /ventas/ranking-tiendas:
+    get:
+      tags: [Ventas]
+      summary: Ranking de tiendas por avance de meta
+      description: |
+        Devuelve las tiendas ordenadas por porcentaje de cumplimiento de meta del día.
+
+        - `orden=asc` → peores primero (útil para detectar alertas)
+        - `orden=desc` → mejores primero (útil para reconocimientos)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: region_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filtra a las tiendas de esa región. Sin filtro devuelve todas.
+          example: R3
+        - name: orden
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
+          description: asc = peores primero | desc = mejores primero
+          example: asc
+        - name: fecha
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2026-05-18"
+      responses:
+        '200':
+          description: Ranking obtenido exitosamente
+          content:
+            application/json:
+              example:
+                success: true
+                total: 14
+                orden: peor_a_mejor
+                fecha: "2026-05-18"
+                region_id: R3
+                data:
+                  - tienda_id: T309
+                    nombre_tienda: Trujillo II - LC
+                    region_id: R3
+                    avance_dia_pct: 28.5
+                    venta_dia_miles_soles: 5.0
+                    meta_dia_miles_soles: 17.5
+                    avance_mes_pct: 71.2
+                    semaforo: "🔴"
+                  - tienda_id: T301
+                    nombre_tienda: Barranca - EFE
+                    region_id: R3
+                    avance_dia_pct: 54.2
+                    semaforo: "🟡"
+
+  /ventas/categorias:
+    get:
+      tags: [Ventas]
+      summary: Ventas por categoría
+      description: |
+        Devuelve las ventas desglosadas por categoría, filtradas según el
+        nivel jerárquico del usuario.
+
+        Categorías disponibles: `LINEA BLANCA`, `COMPUTO`, `VIDEO`,
+        `TELEFONIA`, `MOTOS`, `PADS`, `HOGAR`, `SERVICIOS`, `AUDIO`,
+        `ACCESORIOS TECNOLOGICOS`, `GARANTIA Y SEGUROS`, `DIGITAL`
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: nivel
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [back_office, regional, tienda]
+          example: regional
+        - name: region_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Requerido si nivel es `regional` o `tienda`
+          example: R3
+        - name: tienda_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Requerido si nivel es `tienda`
+          example: T306
+        - name: fecha
+          in: query
+          schema:
+            type: string
+            format: date
+          example: "2026-05-18"
+      responses:
+        '200':
+          description: Categorías obtenidas exitosamente
+          content:
+            application/json:
+              example:
+                success: true
+                ambito: regional
+                region_id: R3
+                fecha: "2026-05-18"
+                data:
+                  - categoria: LINEA BLANCA
+                    venta_dia_miles_soles: 72.2
+                    meta_dia_miles_soles: 86.0
+                    avance_dia_pct: 83.9
+                    semaforo: "🟢"
+                  - categoria: VIDEO
+                    venta_dia_miles_soles: 18.0
+                    meta_dia_miles_soles: 80.7
+                    avance_dia_pct: 22.3
+                    semaforo: "🔴"
+
+  # ── CATÁLOGO ────────────────────────────────────────────────────────────────
+  /catalogo/regiones:
+    get:
+      tags: [Catálogo]
+      summary: Lista de regiones
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: empresa
+          in: query
+          schema:
+            type: string
+            enum: [Conecta, Efectiva]
+          description: Filtra por empresa
+          example: Conecta
+      responses:
+        '200':
+          description: Lista de regiones
+          content:
+            application/json:
+              example:
+                success: true
+                total: 9
+                data:
+                  - region_id: R1
+                    nombre_region: Región 1
+                    empresa: Conecta
+                  - region_id: R3
+                    nombre_region: Región 3
+                    empresa: Conecta
+
+  /catalogo/tiendas:
+    get:
+      tags: [Catálogo]
+      summary: Lista de tiendas
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: region_id
+          in: query
+          schema:
+            type: string
+          description: Filtra por región
+          example: R3
+        - name: empresa
+          in: query
+          schema:
+            type: string
+            enum: [Conecta, Efectiva]
+      responses:
+        '200':
+          description: Lista de tiendas
+          content:
+            application/json:
+              example:
+                success: true
+                total: 14
+                data:
+                  - tienda_id: T306
+                    nombre_tienda: Trujillo I - EFE
+                    region_id: R3
+                    empresa: Conecta
+                  - tienda_id: T307
+                    nombre_tienda: Trujillo - LC
+                    region_id: R3
+                    empresa: Conecta
+
+  /catalogo/tiendas/{tienda_id}:
+    get:
+      tags: [Catálogo]
+      summary: Detalle de una tienda del catálogo
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: tienda_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: T306
+      responses:
+        '200':
+          description: Tienda encontrada
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  tienda_id: T306
+                  nombre_tienda: Trujillo I - EFE
+                  region_id: R3
+                  empresa: Conecta
+        '404':
+          description: Tienda no encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'

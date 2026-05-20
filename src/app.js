@@ -1,20 +1,26 @@
 require("dotenv").config();
-const express   = require("express");
-const cors      = require("cors");
-const helmet    = require("helmet");
-const rateLimit = require("express-rate-limit");
+const express      = require("express");
+const cors         = require("cors");
+const helmet       = require("helmet");
+const rateLimit    = require("express-rate-limit");
+const swaggerUi    = require("swagger-ui-express");
+const YAML         = require("yamljs");
+const path         = require("path");
 
-const authRoutes    = require("./routes/auth");
-const ventasRoutes  = require("./routes/ventas");
+const authRoutes     = require("./routes/auth");
+const ventasRoutes   = require("./routes/ventas");
 const catalogoRoutes = require("./routes/catalogo");
+
+const swaggerDoc = YAML.load(path.join(__dirname, "swagger.yaml"));
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
 // ── Seguridad ──────────────────────────────────────────────────────────────
-app.use(helmet());
+// Desactivar contentSecurityPolicy solo para Swagger UI (necesita inline scripts)
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({
-  origin: "*", // En producción: restringir a dominios Jelou
+  origin: "*",
   methods: ["GET", "POST"],
   allowedHeaders: ["Content-Type", "Authorization", "X-API-Key"],
 }));
@@ -27,6 +33,32 @@ app.use(rateLimit({
 }));
 app.use(express.json({ limit: "1mb" }));
 
+// ── Swagger UI ─────────────────────────────────────────────────────────────
+app.use(
+  "/docs",
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerDoc, {
+    customSiteTitle: "Grupo EFE API — Jelou",
+    customCss: `
+      .topbar { background-color: #1B4F8A; }
+      .topbar-wrapper img { content: url(''); width: 0; }
+      .topbar-wrapper::after {
+        content: 'Grupo EFE × Jelou — API de Reportes de Ventas';
+        color: white; font-size: 18px; font-weight: bold;
+        padding-left: 16px;
+      }
+      .swagger-ui .info h2.title { color: #1B4F8A; }
+    `,
+    swaggerOptions: {
+      persistAuthorization: true,        // recuerda el token entre recargas
+      displayRequestDuration: true,      // muestra cuánto tarda cada request
+      defaultModelsExpandDepth: 2,
+      defaultModelExpandDepth: 2,
+      tryItOutEnabled: true,             // habilita "Try it out" por defecto
+    },
+  })
+);
+
 // ── Health check ───────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
   res.json({
@@ -34,29 +66,11 @@ app.get("/", (req, res) => {
     version: "2.1.0",
     estado: "operativo",
     timestamp: new Date().toISOString(),
+    documentacion: `http://localhost:${PORT}/docs`,
     flujo_auth: [
       "1. POST /auth/token  con X-API-Key  → obtienes Bearer Token",
       "2. Usar Bearer Token en Authorization header para todos los demás endpoints",
     ],
-    endpoints: {
-      auth:    ["POST /auth/token"],
-      ventas:  [
-        "GET  /ventas/resumen-campana?nivel=back_office&nombre=Carlos",
-        "GET  /ventas/resumen-campana?nivel=regional&region_id=R3&nombre=Marco",
-        "GET  /ventas/resumen-campana?nivel=tienda&region_id=R3&tienda_id=T306&nombre=Ana",
-        "POST /ventas/campana-masiva",
-        "GET  /ventas/compania",
-        "GET  /ventas/region/:region_id",
-        "GET  /ventas/tienda/:tienda_id",
-        "GET  /ventas/ranking-tiendas?region_id=R3&orden=asc",
-        "GET  /ventas/categorias?nivel=regional&region_id=R3",
-      ],
-      catalogo: [
-        "GET  /catalogo/regiones?empresa=Conecta",
-        "GET  /catalogo/tiendas?region_id=R3",
-        "GET  /catalogo/tiendas/:tienda_id",
-      ],
-    },
   });
 });
 
@@ -80,9 +94,9 @@ app.use((req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\n🚀 Grupo EFE API v2.1 — http://localhost:${PORT}`);
-  console.log(`🔑 Paso 1: POST /auth/token  con X-API-Key: ${process.env.API_KEY || "efe-sandbox-key-2026"}`);
-  console.log(`🎫 Paso 2: Usar el Bearer Token en Authorization header\n`);
+  console.log(`\n🚀 Grupo EFE API v2.1  —  http://localhost:${PORT}`);
+  console.log(`📚 Swagger UI          —  http://localhost:${PORT}/docs`);
+  console.log(`🔑 API Key             —  ${process.env.API_KEY || "efe-sandbox-key-2026"}\n`);
 });
 
 module.exports = app;
