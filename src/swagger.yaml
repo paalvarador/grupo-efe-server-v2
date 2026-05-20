@@ -6,7 +6,7 @@ info:
     API REST desarrollada por **Jelou AI** como capa de integración entre
     Brain Studio y el sistema de Business Intelligence de Grupo EFE (Clicksense).
 
-    ## Flujo de autenticación
+    ## Flujo de Autenticación
 
     1. Llama a `POST /auth/token` con el header `X-API-Key: efe-sandbox-key-2026`
     2. Guarda el `token` que devuelve la respuesta
